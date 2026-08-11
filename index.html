@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Coin Catcher — Deluxe</title>
+    <!-- Tailwind CSS for UI styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js for 3D graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe Hands for hand tracking -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Inter', 'Noto Sans Thai', sans-serif;
+            touch-action: none;
+        }
+
+        #video-container {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 1;
+        }
+
+        #input-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            /* Cinematic color grade — punchier contrast & saturation, cooler shadows */
+            filter: contrast(1.12) saturate(1.25) brightness(0.96) sepia(0.04) hue-rotate(-2deg);
+        }
+
+        /* Cinematic vignette + subtle grain overlay for a premium look */
+        #vignette {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 2;
+            pointer-events: none;
+            background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.55) 100%);
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        #fx-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 4;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+        }
+
+        .hidden { display: none !important; }
+
+        .glass-panel {
+            background: rgba(20, 15, 35, 0.45);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        #debug-canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 3;
+            pointer-events: none;
+            transform: scaleX(-1);
+        }
+
+        .float-text {
+            position: absolute;
+            font-weight: 900;
+            pointer-events: none;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+            animation: floatUp 1s ease-out forwards;
+            white-space: nowrap;
+        }
+
+        @keyframes floatUp {
+            0% { transform: translate(-50%, 0) scale(0.6); opacity: 0; }
+            15% { transform: translate(-50%, -10px) scale(1.15); opacity: 1; }
+            100% { transform: translate(-50%, -90px) scale(1); opacity: 0; }
+        }
+
+        @keyframes shake-flash {
+            0% { opacity: 0.85; }
+            100% { opacity: 0; }
+        }
+
+        #flash-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 6;
+            pointer-events: none;
+            background: radial-gradient(ellipse at center, rgba(255,40,40,0.0) 30%, rgba(180,0,0,0.65) 100%);
+            opacity: 0;
+        }
+
+        .combo-badge {
+            background: linear-gradient(135deg, #ff9d00, #ff3d3d);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            font-weight: 900;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+        }
+
+        .pulse-glow {
+            animation: pulseGlow 1.6s ease-in-out infinite;
+        }
+        @keyframes pulseGlow {
+            0%, 100% { text-shadow: 0 0 8px rgba(255, 215, 0, 0.6); }
+            50% { text-shadow: 0 0 20px rgba(255, 215, 0, 1); }
+        }
+
+        .title-glow {
+            text-shadow: 0 0 20px rgba(250, 204, 21, 0.7), 0 0 40px rgba(250, 204, 21, 0.35);
+        }
+
+        #hand-warning {
+            transition: opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Video background for AR -->
+    <div id="video-container">
+        <video id="input-video" playsinline autoplay muted></video>
+    </div>
+    <div id="vignette"></div>
+
+    <!-- MediaPipe debug canvas -->
+    <canvas id="debug-canvas"></canvas>
+
+    <!-- Three.js Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Floating text / juice layer -->
+    <div id="fx-layer"></div>
+    <div id="flash-overlay"></div>
+
+    <!-- Start Screen UI -->
+    <div id="start-screen" class="ui-layer bg-black bg-opacity-70 transition-opacity duration-500">
+        <div class="glass-panel p-8 rounded-3xl text-center max-w-md mx-4">
+            <h1 class="text-4xl font-extrabold text-yellow-300 mb-1 tracking-wider title-glow">AR COIN CATCHER</h1>
+            <p class="text-white/70 text-xs uppercase tracking-[0.3em] mb-5">Deluxe Edition</p>
+            <p class="text-white text-base mb-5 leading-relaxed">
+                ใช้<span class="text-green-300 font-bold">นิ้วชี้</span>ของคุณเป็นตัวชี้ เพื่อแตะเก็บของดี<br>
+                และหลบของอันตรายให้ไว ยิ่งเก็บติดกันยิ่งได้<span class="text-orange-300 font-bold">คอมโบ!</span>
+            </p>
+            <div class="grid grid-cols-4 gap-3 mb-6">
+                <div class="flex flex-col items-center">
+                    <div class="w-11 h-11 rounded-full mb-1 shadow-lg flex items-center justify-center font-bold text-yellow-900 bg-gradient-to-br from-yellow-300 to-yellow-600 border-2 border-yellow-200">🪙</div>
+                    <span class="text-[10px] text-green-300 font-semibold">+10</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <div class="w-11 h-11 rounded-full mb-1 shadow-lg flex items-center justify-center bg-gradient-to-br from-fuchsia-300 to-purple-600 border-2 border-fuchsia-200">💎</div>
+                    <span class="text-[10px] text-fuchsia-300 font-semibold">+50</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <div class="w-11 h-11 rounded-lg mb-1 shadow-lg flex items-center justify-center text-xl bg-gray-700">🪨</div>
+                    <span class="text-[10px] text-red-400 font-semibold">จบเกม</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <div class="w-11 h-11 rounded-full mb-1 shadow-lg flex items-center justify-center text-xl bg-black border-2 border-red-500">💣</div>
+                    <span class="text-[10px] text-red-400 font-semibold">จบเกม</span>
+                </div>
+            </div>
+            <p id="loading-text" class="text-yellow-300 mb-4 animate-pulse text-sm">กำลังเตรียมกล้องและระบบ AI...</p>
+            <button id="start-btn" class="hidden w-full bg-gradient-to-r from-green-400 to-emerald-500 hover:from-green-500 hover:to-emerald-600 text-white font-bold py-3 px-6 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95">
+                เริ่มเล่นเลย!
+            </button>
+        </div>
+    </div>
+
+    <!-- In-Game HUD -->
+    <div id="hud" class="hidden absolute top-0 left-0 w-full p-4 z-10 flex justify-between items-start pointer-events-none">
+        <div class="flex flex-col gap-2">
+            <div class="glass-panel px-4 py-2 rounded-full flex items-center space-x-2">
+                <span class="text-2xl">🪙</span>
+                <span id="score-display" class="text-2xl font-bold text-white drop-shadow-md">0</span>
+            </div>
+            <div id="combo-wrap" class="glass-panel px-3 py-1 rounded-full opacity-0 transition-opacity duration-200">
+                <span class="text-sm font-black combo-badge" id="combo-display">COMBO x1</span>
+            </div>
+        </div>
+        <div class="flex flex-col items-end gap-2">
+            <div class="glass-panel px-3 py-1 rounded-full flex items-center">
+                <span class="text-sm font-semibold text-white">Level <span id="level-display">1</span></span>
+            </div>
+            <div class="glass-panel px-3 py-1 rounded-full flex items-center">
+                <span class="text-xs text-yellow-200">ท็อป <span id="highscore-display">0</span></span>
+            </div>
+        </div>
+    </div>
+    <div id="hand-warning" class="hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-10 glass-panel px-4 py-2 rounded-full opacity-0">
+        <span class="text-sm text-white/90">⚠️ ยกมือขึ้นให้กล้องเห็นนิ้วชี้ของคุณ</span>
+    </div>
+
+    <!-- Game Over Screen UI -->
+    <div id="game-over-screen" class="hidden ui-layer bg-red-950 bg-opacity-80 backdrop-blur-sm transition-opacity duration-300">
+        <div class="glass-panel p-8 rounded-3xl text-center max-w-sm mx-4 transform scale-95 transition-transform duration-300" id="game-over-panel">
+            <h2 class="text-5xl font-black text-white mb-2 tracking-tighter">GAME OVER</h2>
+            <p id="game-over-reason" class="text-red-200 mb-6">คุณโดนอันตราย!</p>
+
+            <div class="bg-black bg-opacity-30 rounded-xl p-4 mb-3">
+                <p class="text-sm text-gray-300 uppercase tracking-widest mb-1">คะแนนของคุณ</p>
+                <p id="final-score" class="text-6xl font-bold text-yellow-400 drop-shadow-lg">0</p>
+            </div>
+            <p id="new-highscore-tag" class="hidden text-sm font-bold text-fuchsia-300 mb-5 pulse-glow">🏆 สถิติใหม่!</p>
+            <p id="highscore-tag" class="text-xs text-white/60 mb-5">สถิติสูงสุด: <span id="final-highscore">0</span></p>
+
+            <button id="restart-btn" class="w-full bg-white text-red-900 hover:bg-gray-100 font-bold py-3 px-6 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95">
+                เล่นอีกครั้ง
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // ================= Game State =================
+        let gameState = 'loading';
+        let score = 0;
+        let level = 1;
+        let baseFallSpeed = 0.032;
+        let spawnRate = 950;
+        let lastSpawnTime = 0;
+        let sessionHighScore = 0;
+
+        let combo = 0;
+        let comboMultiplier = 1;
+        let lastCatchTime = -Infinity;
+        const COMBO_WINDOW = 1600; // ms to keep combo alive
+
+        // ================= DOM =================
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('start-btn');
+        const loadingText = document.getElementById('loading-text');
+        const hud = document.getElementById('hud');
+        const scoreDisplay = document.getElementById('score-display');
+        const levelDisplay = document.getElementById('level-display');
+        const highscoreDisplay = document.getElementById('highscore-display');
+        const comboWrap = document.getElementById('combo-wrap');
+        const comboDisplay = document.getElementById('combo-display');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScore = document.getElementById('final-score');
+        const finalHighscore = document.getElementById('final-highscore');
+        const newHighscoreTag = document.getElementById('new-highscore-tag');
+        const gameOverReason = document.getElementById('game-over-reason');
+        const restartBtn = document.getElementById('restart-btn');
+        const videoElement = document.getElementById('input-video');
+        const debugCanvas = document.getElementById('debug-canvas');
+        const debugCtx = debugCanvas.getContext('2d');
+        const fxLayer = document.getElementById('fx-layer');
+        const flashOverlay = document.getElementById('flash-overlay');
+        const handWarning = document.getElementById('hand-warning');
+
+        // ================= Audio (synth, no external assets) =================
+        let audioCtx;
+        function ensureAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+        function playTone(freq, duration, type = 'sine', gainStart = 0.18, delay = 0) {
+            if (!audioCtx) return;
+            const t0 = audioCtx.currentTime + delay;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, t0);
+            gain.gain.setValueAtTime(gainStart, t0);
+            gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start(t0);
+            osc.stop(t0 + duration);
+        }
+        function sfxCoin() { playTone(880, 0.12, 'triangle'); playTone(1320, 0.15, 'triangle', 0.12, 0.03); }
+        function sfxGem() { playTone(660, 0.1, 'sine'); playTone(990, 0.12, 'sine', 0.14, 0.05); playTone(1320, 0.16, 'sine', 0.12, 0.1); }
+        function sfxLevelUp() { playTone(523, 0.12, 'square', 0.1); playTone(659, 0.12, 'square', 0.1, 0.09); playTone(784, 0.22, 'square', 0.12, 0.18); }
+        function sfxGameOver() { playTone(220, 0.4, 'sawtooth', 0.16); playTone(140, 0.6, 'sawtooth', 0.14, 0.15); }
+
+        // ================= Three.js Setup =================
+        const canvas = document.getElementById('game-canvas');
+        const scene = new THREE.Scene();
+
+        let aspect = window.innerWidth / window.innerHeight;
+        const frustumSize = 10;
+        const camera = new THREE.OrthographicCamera(
+            frustumSize * aspect / -2, frustumSize * aspect / 2,
+            frustumSize / 2, frustumSize / -2,
+            0.1, 100
+        );
+        camera.position.z = 10;
+        const cameraBasePos = new THREE.Vector3(0, 0, 10);
+
+        const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // Filmic tone mapping — the same family Unreal Engine uses by default — for punchier highlights
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.15;
+
+        // ---- Lighting: hemisphere + key + rim + a light that follows the pointer ----
+        const hemiLight = new THREE.HemisphereLight(0xbfd9ff, 0x2a1a3a, 0.55);
+        scene.add(hemiLight);
+        const keyLight = new THREE.DirectionalLight(0xfff2d0, 1.0);
+        keyLight.position.set(4, 8, 6);
+        scene.add(keyLight);
+        const rimLight = new THREE.DirectionalLight(0x8ab4ff, 0.4);
+        rimLight.position.set(-5, -3, 4);
+        scene.add(rimLight);
+        const pointerLight = new THREE.PointLight(0x66ffcc, 1.2, 6, 2);
+        pointerLight.position.set(0, 0, 2);
+        scene.add(pointerLight);
+
+        // ---- Soft glow sprite factory (fake bloom, alpha-safe for AR compositing) ----
+        function makeGlowTexture() {
+            const size = 128;
+            const c = document.createElement('canvas');
+            c.width = c.height = size;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+            g.addColorStop(0, 'rgba(255,255,255,1)');
+            g.addColorStop(0.4, 'rgba(255,255,255,0.55)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, size, size);
+            const tex = new THREE.CanvasTexture(c);
+            return tex;
+        }
+        const glowTexture = makeGlowTexture();
+
+        function createGlowSprite(color, scale) {
+            const mat = new THREE.SpriteMaterial({
+                map: glowTexture,
+                color: color,
+                transparent: true,
+                opacity: 0.85,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            const sprite = new THREE.Sprite(mat);
+            sprite.scale.set(scale, scale, 1);
+            return sprite;
+        }
+
+        // ---- Ambient floating dust motes for atmosphere ----
+        const DUST_COUNT = 45;
+        const dustGeo = new THREE.BufferGeometry();
+        const dustPositions = new Float32Array(DUST_COUNT * 3);
+        const dustSpeeds = [];
+        for (let i = 0; i < DUST_COUNT; i++) {
+            dustPositions[i * 3] = (Math.random() - 0.5) * frustumSize * 2;
+            dustPositions[i * 3 + 1] = (Math.random() - 0.5) * frustumSize * 1.4;
+            dustPositions[i * 3 + 2] = -1 - Math.random() * 2;
+            dustSpeeds.push(0.0015 + Math.random() * 0.003);
+        }
+        dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+        const dustMat = new THREE.PointsMaterial({
+            size: 0.09,
+            map: glowTexture,
+            transparent: true,
+            opacity: 0.35,
+            color: 0xbfe3ff,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const dustPoints = new THREE.Points(dustGeo, dustMat);
+        scene.add(dustPoints);
+
+        function updateDust() {
+            const pos = dustGeo.attributes.position;
+            for (let i = 0; i < DUST_COUNT; i++) {
+                let y = pos.getY(i) + dustSpeeds[i];
+                let x = pos.getX(i) + Math.sin(performance.now() * 0.0003 + i) * 0.0015;
+                if (y > frustumSize / 2 + 1) y = -frustumSize / 2 - 1;
+                pos.setY(i, y);
+                pos.setX(i, x);
+            }
+            pos.needsUpdate = true;
+        }
+
+        // ---- Game object collections ----
+        let fallingObjects = [];
+        let particles = [];
+        let sparkles = [];
+
+        // ---- Pointer visual ----
+        const pointerGroup = new THREE.Group();
+        const pointerCore = new THREE.Mesh(
+            new THREE.SphereGeometry(0.16, 20, 20),
+            new THREE.MeshStandardMaterial({ color: 0x66ffcc, emissive: 0x33ffbb, emissiveIntensity: 1.2, roughness: 0.3 })
+        );
+        pointerGroup.add(pointerCore);
+        const pointerRing = new THREE.Mesh(
+            new THREE.RingGeometry(0.28, 0.34, 32),
+            new THREE.MeshBasicMaterial({ color: 0x66ffcc, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+        );
+        pointerGroup.add(pointerRing);
+        const pointerGlow = createGlowSprite(0x66ffcc, 1.4);
+        pointerGroup.add(pointerGlow);
+        scene.add(pointerGroup);
+        pointerGroup.visible = false;
+
+        let pointerPosition = new THREE.Vector3();
+        let isHandDetected = false;
+        let lastHandSeenTime = 0;
+
+        // ================= Resize =================
+        function handleResize() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            renderer.setSize(width, height);
+            debugCanvas.width = width;
+            debugCanvas.height = height;
+            aspect = width / height;
+            camera.left = -frustumSize * aspect / 2;
+            camera.right = frustumSize * aspect / 2;
+            camera.top = frustumSize / 2;
+            camera.bottom = -frustumSize / 2;
+            camera.updateProjectionMatrix();
+        }
+        window.addEventListener('resize', handleResize);
+        debugCanvas.width = window.innerWidth;
+        debugCanvas.height = window.innerHeight;
+
+        // ================= Materials & Geometries =================
+        const coinGeometry = new THREE.CylinderGeometry(0.42, 0.42, 0.1, 40);
+        const coinMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffd34d, metalness: 1.0, roughness: 0.22,
+            clearcoat: 0.6, clearcoatRoughness: 0.2,
+            emissive: 0x996600, emissiveIntensity: 0.15
+        });
+
+        const gemGeometry = new THREE.OctahedronGeometry(0.42, 0);
+        const gemMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xd68bff, metalness: 0.3, roughness: 0.05,
+            clearcoat: 1.0, clearcoatRoughness: 0.05,
+            emissive: 0x7a1fbf, emissiveIntensity: 0.6
+        });
+
+        const rockGeometry = new THREE.DodecahedronGeometry(0.5, 1);
+        const rockMaterial = new THREE.MeshStandardMaterial({
+            color: 0x4a4a52, roughness: 0.95, metalness: 0.05, flatShading: true,
+            emissive: 0x220000, emissiveIntensity: 0.15
+        });
+
+        const bombBodyGeometry = new THREE.IcosahedronGeometry(0.42, 1);
+        const bombMaterial = new THREE.MeshStandardMaterial({
+            color: 0x0a0a0a, roughness: 0.5, metalness: 0.3, flatShading: true,
+            emissive: 0xff2200, emissiveIntensity: 0.35
+        });
+        const fuseGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.25, 6);
+        const fuseMaterial = new THREE.MeshStandardMaterial({ color: 0x8a5a2a, roughness: 0.8 });
+
+        const particleGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+        const coinParticleMaterial = new THREE.MeshBasicMaterial({ color: 0xffd700 });
+        const gemParticleMaterial = new THREE.MeshBasicMaterial({ color: 0xe0a0ff });
+        const explosionParticleMaterial = new THREE.MeshBasicMaterial({ color: 0xff5522 });
+
+        // ================= Object type config =================
+        function typeConfig(t) {
+            switch (t) {
+                case 'coin': return { radius: 0.42, glowColor: 0xffd34d, glowScale: 1.1, points: 10 };
+                case 'gem': return { radius: 0.42, glowColor: 0xd68bff, glowScale: 1.3, points: 50 };
+                case 'rock': return { radius: 0.5, glowColor: 0xff4444, glowScale: 0.9, points: 0 };
+                case 'bomb': return { radius: 0.46, glowColor: 0xff2200, glowScale: 1.3, points: 0 };
+            }
+        }
+
+        function pickSpawnType() {
+            // Difficulty ramps: more hazards & bombs the higher the level
+            const rockChance = Math.min(0.28 + level * 0.025, 0.5);
+            const bombChance = level >= 4 ? Math.min(0.06 + level * 0.015, 0.28) : 0;
+            const gemChance = 0.08;
+            const r = Math.random();
+            if (r < bombChance) return 'bomb';
+            if (r < bombChance + rockChance) return 'rock';
+            if (r < bombChance + rockChance + gemChance) return 'gem';
+            return 'coin';
+        }
+
+        function spawnObject() {
+            if (gameState !== 'playing') return;
+            const type = pickSpawnType();
+            const cfg = typeConfig(type);
+
+            const group = new THREE.Group();
+            let mesh;
+
+            if (type === 'coin') {
+                mesh = new THREE.Mesh(coinGeometry, coinMaterial);
+                mesh.rotation.x = Math.PI / 2;
+                group.add(mesh);
+            } else if (type === 'gem') {
+                mesh = new THREE.Mesh(gemGeometry, gemMaterial);
+                group.add(mesh);
+            } else if (type === 'rock') {
+                mesh = new THREE.Mesh(rockGeometry, rockMaterial);
+                mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+                group.add(mesh);
+            } else if (type === 'bomb') {
+                mesh = new THREE.Mesh(bombBodyGeometry, bombMaterial);
+                group.add(mesh);
+                const fuse = new THREE.Mesh(fuseGeometry, fuseMaterial);
+                fuse.position.set(0, 0.5, 0);
+                fuse.rotation.z = 0.3;
+                group.add(fuse);
+            }
+
+            const glow = createGlowSprite(cfg.glowColor, cfg.glowScale);
+            glow.position.z = -0.05;
+            group.add(glow);
+
+            group.userData = {
+                type, radius: cfg.radius, points: cfg.points,
+                glow, baseGlowScale: cfg.glowScale,
+                speedMultiplier: 0.8 + Math.random() * 0.5 + level * 0.015,
+                rotationSpeed: {
+                    x: (Math.random() - 0.5) * 0.1,
+                    y: (Math.random() - 0.5) * 0.12,
+                    z: (Math.random() - 0.5) * 0.1
+                },
+                spawnTime: performance.now()
+            };
+
+            const xBound = (frustumSize * aspect / 2) - 0.5;
+            const spawnX = (Math.random() * xBound * 2) - xBound;
+            const spawnY = (frustumSize / 2) + 1;
+            group.position.set(spawnX, spawnY, 0);
+
+            scene.add(group);
+            fallingObjects.push(group);
+        }
+
+        // Occasionally spawn a second object at higher levels for real pressure
+        function maybeDoubleSpawn() {
+            if (level >= 5 && Math.random() < 0.35) spawnObject();
+        }
+
+        // ================= Particles (burst on catch / explosion) =================
+        function createParticles(position, material, count = 12, speed = 0.22) {
+            for (let i = 0; i < count; i++) {
+                const particle = new THREE.Mesh(particleGeometry, material);
+                particle.position.copy(position);
+                particle.userData = {
+                    velocity: new THREE.Vector3(
+                        (Math.random() - 0.5) * speed,
+                        (Math.random() - 0.3) * speed,
+                        (Math.random() - 0.5) * speed
+                    ),
+                    life: 1.0,
+                    spin: (Math.random() - 0.5) * 0.3
+                };
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.position.add(p.userData.velocity);
+                p.userData.velocity.y -= 0.004; // gravity
+                p.rotation.x += p.userData.spin;
+                p.rotation.y += p.userData.spin;
+                p.userData.life -= 0.035;
+                p.scale.setScalar(Math.max(p.userData.life, 0));
+                if (p.userData.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Sparkle trail behind coins/gems
+        function maybeEmitSparkle(obj) {
+            if (Math.random() < 0.28) {
+                const glowColor = obj.userData.type === 'gem' ? 0xe0a0ff : 0xfff2b0;
+                const spark = createGlowSprite(glowColor, 0.16);
+                spark.position.copy(obj.position);
+                spark.position.z += 0.02;
+                spark.userData = { life: 1.0 };
+                scene.add(spark);
+                sparkles.push(spark);
+            }
+        }
+
+        function updateSparkles() {
+            for (let i = sparkles.length - 1; i >= 0; i--) {
+                const s = sparkles[i];
+                s.userData.life -= 0.045;
+                s.material.opacity = Math.max(s.userData.life * 0.7, 0);
+                s.scale.multiplyScalar(0.96);
+                if (s.userData.life <= 0) {
+                    scene.remove(s);
+                    sparkles.splice(i, 1);
+                }
+            }
+        }
+
+        // ================= Screen shake =================
+        let shakeIntensity = 0;
+        function triggerShake(amount) {
+            shakeIntensity = Math.max(shakeIntensity, amount);
+        }
+        function updateShake() {
+            if (shakeIntensity > 0.0005) {
+                camera.position.x = cameraBasePos.x + (Math.random() - 0.5) * shakeIntensity;
+                camera.position.y = cameraBasePos.y + (Math.random() - 0.5) * shakeIntensity;
+                shakeIntensity *= 0.85;
+            } else {
+                camera.position.copy(cameraBasePos);
+                shakeIntensity = 0;
+            }
+        }
+
+        // ================= Floating DOM text =================
+        function worldToScreen(vec3) {
+            const v = vec3.clone().project(camera);
+            return {
+                x: (v.x * 0.5 + 0.5) * window.innerWidth,
+                y: (-v.y * 0.5 + 0.5) * window.innerHeight
+            };
+        }
+        function spawnFloatText(worldPos, text, colorClass, sizeClass = 'text-2xl') {
+            const { x, y } = worldToScreen(worldPos);
+            const el = document.createElement('div');
+            el.className = `float-text ${sizeClass} ${colorClass}`;
+            el.style.left = x + 'px';
+            el.style.top = y + 'px';
+            el.textContent = text;
+            fxLayer.appendChild(el);
+            setTimeout(() => el.remove(), 1000);
+        }
+
+        // ================= Combo / scoring =================
+        function registerCatch(obj) {
+            const now = performance.now();
+            if (now - lastCatchTime < COMBO_WINDOW) {
+                combo++;
+            } else {
+                combo = 1;
+            }
+            lastCatchTime = now;
+            comboMultiplier = 1 + Math.floor(combo / 3) * 0.5; // +0.5x every 3-streak
+            comboMultiplier = Math.min(comboMultiplier, 4);
+
+            const base = obj.userData.points;
+            const gained = Math.round(base * comboMultiplier);
+            score += gained;
+            scoreDisplay.textContent = score;
+
+            const isGem = obj.userData.type === 'gem';
+            const label = combo >= 3 ? `+${gained}  x${comboMultiplier.toFixed(1)}` : `+${gained}`;
+            spawnFloatText(obj.position, label, isGem ? 'text-fuchsia-300' : 'text-yellow-300', isGem ? 'text-3xl' : 'text-2xl');
+
+            if (combo >= 2) {
+                comboWrap.classList.remove('opacity-0');
+                comboDisplay.textContent = `COMBO x${combo}`;
+            }
+
+            if (isGem) {
+                createParticles(obj.position, gemParticleMaterial, 16, 0.28);
+                triggerShake(0.12);
+                sfxGem();
+            } else {
+                createParticles(obj.position, coinParticleMaterial, 10, 0.2);
+                triggerShake(0.05 + Math.min(combo * 0.01, 0.08));
+                sfxCoin();
+            }
+
+            // Level up check
+            const newLevel = Math.floor(score / 60) + 1;
+            if (newLevel > level) {
+                level = newLevel;
+                levelDisplay.textContent = level;
+                baseFallSpeed += 0.007;
+                spawnRate = Math.max(230, spawnRate - 90);
+                spawnFloatText(obj.position.clone().add(new THREE.Vector3(0, 0.6, 0)), 'LEVEL UP!', 'text-cyan-300', 'text-xl');
+                sfxLevelUp();
+            }
+
+            if (score > sessionHighScore) {
+                sessionHighScore = score;
+                highscoreDisplay.textContent = sessionHighScore;
+            }
+        }
+
+        function checkCollisions() {
+            if (!isHandDetected) return;
+
+            for (let i = fallingObjects.length - 1; i >= 0; i--) {
+                const obj = fallingObjects[i];
+                const distance = pointerPosition.distanceTo(obj.position);
+                const collisionThreshold = obj.userData.radius + 0.3;
+
+                if (distance < collisionThreshold) {
+                    if (obj.userData.type === 'coin' || obj.userData.type === 'gem') {
+                        registerCatch(obj);
+                        scene.remove(obj);
+                        fallingObjects.splice(i, 1);
+                    } else if (obj.userData.type === 'rock') {
+                        gameOver('คุณโดนก้อนหิน!', obj.position);
+                        return;
+                    } else if (obj.userData.type === 'bomb') {
+                        gameOver('บูม! คุณโดนระเบิด!', obj.position, true);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // ================= Main update =================
+        function updateGame(time) {
+            if (gameState !== 'playing') return;
+
+            if (time - lastSpawnTime > spawnRate) {
+                spawnObject();
+                maybeDoubleSpawn();
+                lastSpawnTime = time;
+            }
+
+            const bottomBound = -(frustumSize / 2) - 1;
+
+            for (let i = fallingObjects.length - 1; i >= 0; i--) {
+                const obj = fallingObjects[i];
+                obj.position.y -= baseFallSpeed * obj.userData.speedMultiplier;
+                obj.children[0].rotation.x += obj.userData.rotationSpeed.x;
+                obj.children[0].rotation.y += obj.userData.rotationSpeed.y;
+                obj.children[0].rotation.z += obj.userData.rotationSpeed.z;
+
+                // Pulse glow for hazards to read as "danger"
+                if (obj.userData.type === 'bomb' || obj.userData.type === 'rock') {
+                    const pulse = 1 + Math.sin(time * 0.01 + obj.userData.spawnTime) * 0.25;
+                    obj.userData.glow.scale.set(obj.userData.baseGlowScale * pulse, obj.userData.baseGlowScale * pulse, 1);
+                }
+                if (obj.userData.type === 'coin' || obj.userData.type === 'gem') {
+                    maybeEmitSparkle(obj);
+                }
+
+                if (obj.position.y < bottomBound) {
+                    scene.remove(obj);
+                    fallingObjects.splice(i, 1);
+                    // missing a coin/gem gently decays combo, doesn't erase it outright
+                }
+            }
+
+            // Combo expiry
+            if (combo > 0 && performance.now() - lastCatchTime > COMBO_WINDOW) {
+                combo = 0;
+                comboMultiplier = 1;
+                comboWrap.classList.add('opacity-0');
+            }
+
+            checkCollisions();
+            updateParticles();
+            updateSparkles();
+            updateDust();
+            updateShake();
+
+            // Hand-lost warning
+            if (!isHandDetected && performance.now() - lastHandSeenTime > 900) {
+                handWarning.classList.remove('hidden');
+                requestAnimationFrame(() => handWarning.style.opacity = '1');
+            } else {
+                handWarning.style.opacity = '0';
+            }
+
+            if (isHandDetected) {
+                pointerGroup.visible = true;
+                pointerGroup.position.copy(pointerPosition);
+                pointerLight.position.set(pointerPosition.x, pointerPosition.y, 2);
+                const scale = 1 + Math.sin(time * 0.012) * 0.15;
+                pointerGroup.scale.set(scale, scale, scale);
+                pointerRing.rotation.z += 0.02;
+            } else {
+                pointerGroup.visible = false;
+            }
+        }
+
+        // ================= MediaPipe =================
+        function onResults(results) {
+            debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandDetected = true;
+                lastHandSeenTime = performance.now();
+                const landmarks = results.multiHandLandmarks[0];
+                const indexTip = landmarks[8];
+
+                if (gameState === 'playing') {
+                    debugCtx.fillStyle = 'rgba(102,255,204,0.9)';
+                    debugCtx.beginPath();
+                    debugCtx.arc(indexTip.x * debugCanvas.width, indexTip.y * debugCanvas.height, 6, 0, 2 * Math.PI);
+                    debugCtx.fill();
+                }
+
+                const mappedX = -((indexTip.x - 0.5) * frustumSize * aspect);
+                const mappedY = -((indexTip.y - 0.5) * frustumSize);
+
+                pointerPosition.x += (mappedX - pointerPosition.x) * 0.4;
+                pointerPosition.y += (mappedY - pointerPosition.y) * 0.4;
+                pointerPosition.z = 0;
+            } else {
+                isHandDetected = false;
+            }
+        }
+
+        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 0,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        let cameraObj;
+        async function setupCamera() {
+            try {
+                cameraObj = new Camera(videoElement, {
+                    onFrame: async () => { await hands.send({ image: videoElement }); },
+                    width: 640,
+                    height: 480
+                });
+                await cameraObj.start();
+                gameState = 'ready';
+                loadingText.classList.add('hidden');
+                startBtn.classList.remove('hidden');
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                loadingText.textContent = 'ไม่สามารถเปิดกล้องได้ โปรดอนุญาตการเข้าถึงกล้อง';
+                loadingText.classList.remove('text-yellow-300', 'animate-pulse');
+                loadingText.classList.add('text-red-500');
+            }
+        }
+
+        // ================= Flow control =================
+        function clearBoard() {
+            fallingObjects.forEach(o => scene.remove(o));
+            fallingObjects = [];
+            particles.forEach(p => scene.remove(p));
+            particles = [];
+            sparkles.forEach(s => scene.remove(s));
+            sparkles = [];
+        }
+
+        function startGame() {
+            ensureAudio();
+            gameState = 'playing';
+            score = 0;
+            level = 1;
+            baseFallSpeed = 0.032;
+            spawnRate = 950;
+            combo = 0;
+            comboMultiplier = 1;
+            lastCatchTime = -Infinity;
+
+            scoreDisplay.textContent = '0';
+            levelDisplay.textContent = '1';
+            highscoreDisplay.textContent = sessionHighScore;
+            comboWrap.classList.add('opacity-0');
+
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            hud.classList.remove('hidden');
+            handWarning.classList.add('hidden');
+
+            clearBoard();
+            lastSpawnTime = performance.now();
+        }
+
+        function gameOver(reasonText, atPosition, isExplosion = false) {
+            gameState = 'gameover';
+            sfxGameOver();
+            hud.classList.add('hidden');
+            gameOverReason.textContent = reasonText;
+
+            if (isExplosion) {
+                createParticles(atPosition, explosionParticleMaterial, 24, 0.4);
+                triggerShake(0.45);
+            } else {
+                triggerShake(0.25);
+            }
+
+            flashOverlay.style.animation = 'none';
+            void flashOverlay.offsetWidth; // reflow to restart animation
+            flashOverlay.style.animation = 'shake-flash 0.6s ease-out';
+
+            const beatHighscore = score >= sessionHighScore && score > 0;
+            if (score > sessionHighScore) sessionHighScore = score;
+
+            setTimeout(() => {
+                gameOverScreen.classList.remove('hidden');
+                finalScore.textContent = score;
+                finalHighscore.textContent = sessionHighScore;
+                newHighscoreTag.classList.toggle('hidden', !beatHighscore);
+
+                const panel = document.getElementById('game-over-panel');
+                panel.classList.remove('scale-95');
+                panel.classList.add('scale-100');
+                setTimeout(() => {
+                    panel.classList.remove('scale-100');
+                    panel.classList.add('scale-95');
+                }, 150);
+            }, 280);
+        }
+
+        startBtn.addEventListener('click', startGame);
+        restartBtn.addEventListener('click', startGame);
+
+        // ================= Animation loop =================
+        function animate(time) {
+            requestAnimationFrame(animate);
+            updateGame(time);
+
+            fallingObjects.forEach(obj => {
+                if (obj.userData.type === 'coin') obj.children[0].rotation.z += 0.06;
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = () => {
+            handleResize();
+            setupCamera();
+            requestAnimationFrame(animate);
+        };
+    </script>
+</body>
+</html>
